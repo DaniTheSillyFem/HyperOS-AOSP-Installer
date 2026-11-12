@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    compileSdk 35
-    buildToolsVersion "35.0.0"
+    compileSdk 36
+    buildToolsVersion "36.0.0"
 
     defaultConfig {
-        applicationId "io.github.tehcneko.hyperos.aospinstaller"
+        applicationId "io.github.ella.hosaospinstaller"
         minSdkVersion 30
-        targetSdkVersion 35
+        targetSdkVersion 36
         versionCode rootProject.ext.commitCount
-        versionName "1.1.0"
+        versionName "1.2.0"
     }
 
     Properties localProperties = new Properties()
@@ -62,6 +62,5 @@ android {
 
 dependencies {
     compileOnly 'androidx.annotation:annotation:1.8.2'
-    compileOnly 'io.github.libxposed:api:100'
-    compileOnly project(":libxposed-compat")
+    compileOnly 'io.github.libxposed:api:101.0.1'
 }
