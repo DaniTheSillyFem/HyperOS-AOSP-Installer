@@ -1,84 +1,81 @@
 package io.github.tehcneko.hyperinstaller;
 
-import android.annotation.SuppressLint;
-import android.util.Log;
-
 import androidx.annotation.NonNull;
-
-import io.github.libxposed.api.XposedInterface;
+import android.util.Log;
 import io.github.libxposed.api.XposedModule;
-import io.github.libxposed.api.annotations.AfterInvocation;
-import io.github.libxposed.api.annotations.BeforeInvocation;
-import io.github.libxposed.api.annotations.XposedHooker;
+import java.lang.reflect.Method;
 
-@SuppressLint("PrivateApi")
 public class Hooker extends XposedModule {
-
     private static final String TAG = "HyperInstaller";
 
-    public Hooker(@NonNull XposedInterface base, @NonNull ModuleLoadedParam param) {
-        super(base, param);
-    }
+    // Tracks nested calls on the current system_server thread.
+    private static final ThreadLocal<Integer> FAKE_CTS_DEPTH =
+            ThreadLocal.withInitial(() -> 0);
 
     @Override
-    public void onSystemServerLoaded(@NonNull SystemServerLoadedParam param) {
+    public void onSystemServerStarting(
+            @NonNull SystemServerStartingParam param) {
+        ClassLoader classLoader = param.getClassLoader();
+
         try {
-            hookPackageManagerServiceImpl(param.getClassLoader());
+            hookPackageManagerServiceImpl(classLoader);
         } catch (Throwable t) {
-            log("Failed to hook PackageManagerServiceImpl", t);
+            log(Log.ERROR, TAG,
+                    "Failed to hook PackageManagerServiceImpl", t);
         }
+
         try {
-            hookIsCTS(param.getClassLoader());
+            hookIsCTS(classLoader);
         } catch (Throwable t) {
-            log("Failed to hook isCTS", t);
+            log(Log.ERROR, TAG, "Failed to hook isCTS", t);
         }
     }
 
-    private void hookPackageManagerServiceImpl(ClassLoader classLoader) throws ClassNotFoundException {
-        var packageManagerServiceImpl = classLoader.loadClass("com.android.server.pm.PackageManagerServiceImpl");
-        var methods = packageManagerServiceImpl.getDeclaredMethods();
-        for (var method : methods) {
-            var name = method.getName();
-            if ("hookChooseBestActivity".equals(name) ||
-                    "updateDefaultPkgInstallerLocked".equals(name) ||
-                    "assertValidApkAndInstaller".equals(name)) {
-                Log.d(TAG, "hooking method " + name);
-                hook(method, PackageManagerServiceImplHooker.class);
+    private void hookPackageManagerServiceImpl(
+            ClassLoader classLoader) throws ClassNotFoundException {
+        Class<?> pms = classLoader.loadClass(
+                "com.android.server.pm.PackageManagerServiceImpl"
+        );
+
+        for (Method method : pms.getDeclaredMethods()) {
+            String name = method.getName();
+            if ("hookChooseBestActivity".equals(name)
+                    || "updateDefaultPkgInstallerLocked".equals(name)
+                    || "assertValidApkAndInstaller".equals(name)) {
+                log(Log.DEBUG, TAG, "Hooking method " + name, null);
+
+                hook(method).intercept(chain -> {
+                    int previousDepth = FAKE_CTS_DEPTH.get();
+                    FAKE_CTS_DEPTH.set(previousDepth + 1);
+                    try {
+                        return chain.proceed();
+                    } finally {
+                        if (previousDepth == 0) {
+                            FAKE_CTS_DEPTH.remove();
+                        } else {
+                            FAKE_CTS_DEPTH.set(previousDepth);
+                        }
+                    }
+                });
+
                 deoptimize(method);
             }
         }
     }
 
-    private void hookIsCTS(ClassLoader classLoader) throws NoSuchMethodException, ClassNotFoundException {
-        var packageManagerServiceImpl = classLoader.loadClass("com.android.server.pm.PackageManagerServiceImpl");
-        var isCTSMethod = packageManagerServiceImpl.getDeclaredMethod("isCTS");
-        hook(isCTSMethod, IsCTSHooker.class);
-    }
+    private void hookIsCTS(
+            ClassLoader classLoader)
+            throws ClassNotFoundException, NoSuchMethodException {
+        Class<?> pms = classLoader.loadClass(
+                "com.android.server.pm.PackageManagerServiceImpl"
+        );
 
-    @XposedHooker
-    private static class IsCTSHooker implements Hooker {
-        public static boolean fakeCTS = false;
-
-        @BeforeInvocation
-        public static void before(@NonNull BeforeHookCallback callback) throws Throwable {
-            if (fakeCTS) {
-                callback.returnAndSkip(true);
+        Method isCTS = pms.getDeclaredMethod("isCTS");
+        hook(isCTS).intercept(chain -> {
+            if (FAKE_CTS_DEPTH.get() > 0) {
+                return true;
             }
-        }
+            return chain.proceed();
+        });
     }
-
-    @XposedHooker
-    private static class PackageManagerServiceImplHooker implements Hooker {
-
-        @BeforeInvocation
-        public static void before(@NonNull BeforeHookCallback callback) throws Throwable {
-            IsCTSHooker.fakeCTS = true;
-        }
-
-        @AfterInvocation
-        public static void after(@NonNull AfterHookCallback callback) throws Throwable {
-            IsCTSHooker.fakeCTS = false;
-        }
-    }
-
 }
